@@ -3,6 +3,11 @@ uuid = "10cee5ab-6f81-49b9-9f1b-9466f9ea76ae"
 authors = ["Ryan Jadidi <rampbj@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+MySQL = "39abe10b-433b-5dbd-92d4-e302a9df00cd"
+
 [compat]
 julia = "1"
 
