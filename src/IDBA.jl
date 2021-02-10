@@ -4,21 +4,21 @@ using Dates
 using DataFrames
 using CSV
 using MySQL
+using CategoricalArrays
 
-
-function init(data_path::String, theta::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
+function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
-    # Dealing with data
+    # Dealing with dataframe structure format
     data_names = names(data)
-    timestamp_column = contains("Timestamp", data_names[1])
-    Close_column = contains("Close", data_names[2])
-    bid_column = contains("Ask", data_names[3])
+    timestamp_column = in("Timestamp", data_names)
+    Close_column = in("Close", data_names)
+    bid_column = in("Ask", data_names)
     if ncol(data) < 3 || !timestamp_column || !Close_column || !ask_column
         error("Data is not aligned with the required structure!
                     Module expects at least Timestamp,Close and Ask columns")
     end
     # Dealing with theta and down_inds'
-    theta_length = length(theta)
+    theta_length = length(thetas)
     if !isassigned(down_ind, theta_length)
         error("we need to have same number of down_inds' as thetas'")
     end
@@ -30,29 +30,29 @@ function pct_change(input::AbstractVector{<:Number}, period::Int=1)
     [fill(missing, period); res]
 end
 
-function prepare(data::DataFrame, dc_offset::AbstractVector{<:Number}, Algo::Symbol, down_ind::AbstractVector{<:Number})
+function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
         # preparing dataframe for getting fit
-    insertcols!(data, :pct_change => pct_change(data.Price))
-    dropmissing!(data, :pct_change)
-    if Algo == :TSFDC
-        last_dc_offset = last(dc_offset)
+    dropmissing!(insertcols!(data, :pct_change => pct_change(data.Close)))
+    if eltype(data.Timestamp) !== DateTime
+        data[!,:Timestamp] = parse.(DateTime, data.Timestamp, dateformat"yyyymmdd\ HHMMSSsss")
     end
-    for current_offset_value in dc_offset
-        insertcols!(data, "Event_$(current_offset_value)" => "")
-        if Algo == :Book
-            insertcols!(data, "Event_$(current_offset_value)_TMV" => NaN)
-            insertcols!(data, "Event_$(current_offset_value)_T" => NaN)
-            insertcols!(data, "Event_$(current_offset_value)_R" => NaN)
-        elseif Algo == :IDBA
-            for down_index in down_ind
-                insertcols!(data, "Event_$(current_offset_value)_OSV_down_ind_$(down_index)" => NaN)
-            end
-        elseif Algo == :TSFDC && current_offset_value == last_dc_offset
-            insertcols!(data, "Event_$(current_offset_value)_BBTheta" => false)
-            insertcols!(data, "Event_$(current_offset_value)_OSV" => NaN)
+    for theta in thetas
+        theta_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+        levels!(theta_column, ["Up", "Down"]; allowmissing=true)
+        theta_column = compress(theta_column)
+        ext_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+        levels!(ext_column, ["UXP", "DXP"]; allowmissing=true)
+        ext_column = compress(ext_column)
+        insertcols!(data, "$(theta)_theta" => theta_column)
+        insertcols!(data, "$(theta)_Ext" => ext_column)
+        for down_index in down_ind
+            down_index_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+            levels!(down_index_column, ["trade"]; allowmissing=true)
+            down_index_column = compress(down_index_column)
+            insertcols!(data, "$(theta)_theta$(down_index)_down_ind_trade" => down_index_column)
         end
     end
-    return data, dc_offset, Algo, down_ind
+    return data, theta, down_ind
 end
 
 function fit(data::DataFrame, dc_offset::AbstractVector{<:Number}, Algo::Symbol, down_ind::AbstractVector{<:Number})
