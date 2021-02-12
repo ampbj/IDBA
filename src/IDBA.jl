@@ -12,7 +12,7 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
     data_names = names(data)
     timestamp_column = in("Timestamp", data_names)
     Close_column = in("Close", data_names)
-    bid_column = in("Ask", data_names)
+    ask_column = in("Ask", data_names)
     if ncol(data) < 3 || !timestamp_column || !Close_column || !ask_column
         error("Data is not aligned with the required structure!
                     Module expects at least Timestamp,Close and Ask columns")
@@ -22,7 +22,7 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
     if !isassigned(down_ind, theta_length)
         error("we need to have same number of down_inds' as thetas'")
     end
-    return data, theta, down_ind
+    return data, thetas, down_ind
 end
 
 function pct_change(input::AbstractVector{<:Number}, period::Int=1)
@@ -37,56 +37,52 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         data[!,:Timestamp] = parse.(DateTime, data.Timestamp, dateformat"yyyymmdd\ HHMMSSsss")
     end
     for theta in thetas
-        theta_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+        data_length = length(data.Timestamp)
+        theta_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
         levels!(theta_column, ["Up", "Down"]; allowmissing=true)
         theta_column = compress(theta_column)
-        ext_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+        ext_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
         levels!(ext_column, ["UXP", "DXP"]; allowmissing=true)
         ext_column = compress(ext_column)
-        insertcols!(data, "$(theta)_theta" => theta_column)
-        insertcols!(data, "$(theta)_Ext" => ext_column)
+        insertcols!(data, "$(theta)_theta"  => theta_column)
+        insertcols!(data, "$(theta)_Exp"  => ext_column)
         for down_index in down_ind
-            down_index_column = CategoricalArray{Union{Missing, String}}(repeat([missing],length(data.Timestamp)))
+            down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
             levels!(down_index_column, ["trade"]; allowmissing=true)
             down_index_column = compress(down_index_column)
-            insertcols!(data, "$(theta)_theta$(down_index)_down_ind_trade" => down_index_column)
+            insertcols!(data, "$(theta)t$(down_index)d_trades"  => down_index_column)
         end
     end
-    return data, theta, down_ind
+    return data, thetas, down_ind
 end
 
-function fit(data::DataFrame, dc_offset::AbstractVector{<:Number}, Algo::Symbol, down_ind::AbstractVector{<:Number})
+function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     rows = Tables.namedtupleiterator(data)
-    dc_offset_length = length(dc_offset)
-    DC_event = repeat(["init"], dc_offset_length)
-    DC_highest_price = repeat([data[1,:Price]], dc_offset_length)
-    DC_lowest_price = repeat([data[1,:Price]], dc_offset_length)
-    DC_highest_price_index = repeat([data[1, :Timestamp]], dc_offset_length)
-    DC_lowest_price_index = repeat([data[1, :Timestamp]], dc_offset_length)
-    last_dc_offset = last(dc_offset)
-    if Algo == :IDBA
-        IDBA_last_downtrend = Vector{DataFrame}(undef, length(dc_offset))
-    end
-    function fit_implementation(row, index, offset_value, current_offset_column, last_round=false)
+    theta_length = length(thetas)
+    DC_event = repeat(["init"], theta_length)
+    DC_highest_price = repeat([data[1,:Close]], theta_length)
+    DC_lowest_price = repeat([data[1,:Close]], theta_length)
+    DC_highest_price_time = repeat([data[1, :Timestamp]], theta_length)
+    DC_lowest_price_time = repeat([data[1, :Timestamp]], theta_length)
+
+    function fit_implementation(row, index, theta, down_index)
+        current_theta_column = "$(theta)_theta"
+        current_exp_column = "$(theta)_Exp"
+        current_trade_column = "$(theta)t$(down_index)d_trades"
         if DC_event[index] == "downtrend" || DC_event[index] == "init"
-            if row.Price >= (DC_lowest_price[index] * (1 + offset_value))
+            if row.Close >= DC_lowest_price[index] * (1 + theta)
                 DC_event[index] = "uptrend"
-                data[(data.Timestamp .== row.Timestamp), current_offset_column] = ["Up"]
-                check_null_value = data[(data.Timestamp .== DC_lowest_price_index[index]), current_offset_column]
-                isempty(check_null_value[1]) ?
-                    data[data.Timestamp .== DC_lowest_price_index[index], current_offset_column] = ["DXP"] :
-                    data[data.Timestamp .== DC_lowest_price_index[index], current_offset_column] = ["Down+DXP"]
-                if Algo == :IDBA
-                    IDBA_last_downtrend[index] = DataFrame()
-                end
-                DC_highest_price[index] = row.Price
-                DC_highest_price_index[index] = row.Timestamp
+                data[(data.Timestamp .== row.Timestamp), current_theta_column] = ["Up"]
+                data[data.Timestamp .== DC_lowest_price_time[index], current_exp_column] = ["DXP"]
+                DC_highest_price[index] = row.Close
+                DC_highest_price_time[index] = row.Timestamp
             end
+            #=
             if Algo == :IDBA && isassigned(IDBA_last_downtrend, index) && !isempty(IDBA_last_downtrend[index])
                 last_downtrend_time = IDBA_last_downtrend[index].Timestamp[1]
                 last_downtrend_price = IDBA_last_downtrend[index].Price[1]
                 if row.Timestamp > last_downtrend_time
-                    OSV = ((row.Price - last_downtrend_price) / last_downtrend_price) / offset_value
+                    OSV = ((row.Close - last_downtrend_price) / last_downtrend_price) / offset_value
                     for down_index in down_ind
                         if OSV > down_index
                             data[(data.Timestamp .== row.Timestamp), "$(current_offset_column)_OSV_down_ind_$(down_index)"] = [OSV]
@@ -94,40 +90,35 @@ function fit(data::DataFrame, dc_offset::AbstractVector{<:Number}, Algo::Symbol,
                     end
                 end
             end
-            if row.Price <= DC_lowest_price[index]
-                DC_lowest_price[index] = row.Price
-                DC_lowest_price_index[index] = row.Timestamp
+            =#
+            if row.Close <= DC_lowest_price[index]
+                DC_lowest_price[index] = row.Close
+                DC_lowest_price_time[index] = row.Timestamp
             end
         end
         if DC_event[index] == "uptrend" || DC_event[index] == "init"
-            if row.Price <= (DC_highest_price[index] * (1 - offset_value))
+            if row.Close <= DC_highest_price[index] * (1 - theta)
                 DC_event[index] = "downtrend"
-                data[(data.Timestamp .== row.Timestamp), current_offset_column] = ["Down"]
-                if Algo == :IDBA
-                    IDBA_last_downtrend[index] = data[(data.Timestamp .== row.Timestamp), [:Timestamp, :Price]]
-                end
-                check_null_value = data[(data.Timestamp .== DC_highest_price_index[index]), current_offset_column]
-                isempty(check_null_value[1]) ?
-                    data[(data.Timestamp .== DC_highest_price_index[index]), current_offset_column] = ["UXP"] :
-                    data[(data.Timestamp .== DC_highest_price_index[index]), current_offset_column] = ["Up+UXP"]
-                DC_lowest_price[index] = row.Price
-                DC_lowest_price_index[index] = row.Timestamp
+                data[(data.Timestamp .== row.Timestamp), current_theta_column] = ["Down"]
+                data[(data.Timestamp .== DC_highest_price_time[index]), current_exp_column] = ["UXP"]
+                DC_lowest_price[index] = row.Close
+                DC_lowest_price_time[index] = row.Timestamp
             end
-            if row.Price >= DC_highest_price[index]
-                DC_highest_price[index] = row.Price
-                DC_highest_price_index[index] = row.Timestamp
+            if row.Close >= DC_highest_price[index]
+                DC_highest_price[index] = row.Close
+                DC_highest_price_time[index] = row.Timestamp
             end
         end
     end
-        for row in rows
-            for (index, offset_value) in enumerate(dc_offset)
-                current_offset_column = "Event_$(offset_value)"
-                fit_implementation(row, index, offset_value, current_offset_column)
+    # Main function loop
+    for row in rows
+        for (index, theta) in enumerate(thetas)
+            for down_index in down_ind
+                fit_implementation(row, index, theta, down_index)
             end
         end
     end
     return data
 end
-
 
 end
