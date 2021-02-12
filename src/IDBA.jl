@@ -44,13 +44,13 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         ext_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
         levels!(ext_column, ["UXP", "DXP"]; allowmissing=true)
         ext_column = compress(ext_column)
-        insertcols!(data, "$(theta)_theta"  => theta_column)
-        insertcols!(data, "$(theta)_Exp"  => ext_column)
+        insertcols!(data, "$(theta)_theta"   => theta_column)
+        insertcols!(data, "$(theta)_Exp"   => ext_column)
         for down_index in down_ind
             down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
             levels!(down_index_column, ["trade"]; allowmissing=true)
             down_index_column = compress(down_index_column)
-            insertcols!(data, "$(theta)t$(down_index)d_trades"  => down_index_column)
+            insertcols!(data, "$(theta)t$(down_index)d_trades"   => down_index_column)
         end
     end
     return data, thetas, down_ind
@@ -64,8 +64,9 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     DC_lowest_price = repeat([data[1,:Close]], theta_length)
     DC_highest_price_time = repeat([data[1, :Timestamp]], theta_length)
     DC_lowest_price_time = repeat([data[1, :Timestamp]], theta_length)
-
-    function fit_implementation(row, index, theta, down_index)
+    last_downtrend_PDCC = zeros(theta_length)
+    trades_open = repeat([false], )
+    function fit_implementation(row, index, theta, down_ind)
         current_theta_column = "$(theta)_theta"
         current_exp_column = "$(theta)_Exp"
         current_trade_column = "$(theta)t$(down_index)d_trades"
@@ -76,21 +77,17 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
                 data[data.Timestamp .== DC_lowest_price_time[index], current_exp_column] = ["DXP"]
                 DC_highest_price[index] = row.Close
                 DC_highest_price_time[index] = row.Timestamp
-            end
-            #=
-            if Algo == :IDBA && isassigned(IDBA_last_downtrend, index) && !isempty(IDBA_last_downtrend[index])
-                last_downtrend_time = IDBA_last_downtrend[index].Timestamp[1]
-                last_downtrend_price = IDBA_last_downtrend[index].Price[1]
-                if row.Timestamp > last_downtrend_time
-                    OSV = ((row.Close - last_downtrend_price) / last_downtrend_price) / offset_value
-                    for down_index in down_ind
-                        if OSV > down_index
-                            data[(data.Timestamp .== row.Timestamp), "$(current_offset_column)_OSV_down_ind_$(down_index)"] = [OSV]
-                        end
+
+            elseif !iszero(last_downtrend_PDCC[index])
+                PDCC = last_downtrend_PDCC[index]
+                OSV = ((row.Close - PDCC) / PDCC) / theta
+                for down_index in down_ind
+                    if OSV <= down_index
+                        #TRADE BUY
                     end
                 end
             end
-            =#
+
             if row.Close <= DC_lowest_price[index]
                 DC_lowest_price[index] = row.Close
                 DC_lowest_price_time[index] = row.Timestamp
@@ -100,6 +97,7 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
             if row.Close <= DC_highest_price[index] * (1 - theta)
                 DC_event[index] = "downtrend"
                 data[(data.Timestamp .== row.Timestamp), current_theta_column] = ["Down"]
+                last_downtrend_PDCC[index] = row.Close
                 data[(data.Timestamp .== DC_highest_price_time[index]), current_exp_column] = ["UXP"]
                 DC_lowest_price[index] = row.Close
                 DC_lowest_price_time[index] = row.Timestamp
@@ -113,9 +111,7 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     # Main function loop
     for row in rows
         for (index, theta) in enumerate(thetas)
-            for down_index in down_ind
-                fit_implementation(row, index, theta, down_index)
-            end
+            fit_implementation(row, index, theta, down_ind)
         end
     end
     return data
