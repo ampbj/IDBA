@@ -61,18 +61,23 @@ end
 function trade_open(data, Timestamp, theta, OSV, down_ind, trades_open, trades_open_slot)
     for (d_index, down_index) in enumerate(down_ind)
         if OSV <= down_index
-            current_trade_column = "Trades_$(theta)t$(down_index)d"
-            trades_open[(trades_open_slot + d_index)] = true
-            data[(data.Timestamp .== Timestamp), current_trade_column] = ["Trade_open"]
+            if !trades_open[(trades_open_slot + d_index)]
+                current_trade_column = "Trades_$(theta)t$(down_index)d"
+                println("trades $(Timestamp) open. Theta: $(theta), down_index: $(down_index)")
+                fill!(@view(trades_open[(trades_open_slot + d_index)]), true)
+                data[(data.Timestamp .== Timestamp), current_trade_column] = ["Trade_open"]
+            end
         end
     end
 end
 function trade_close(data, Timestamp, theta, down_ind, trades_open, trades_open_slot)
     for (d_index, down_index) in enumerate(down_ind)
-        current_trading_slot = trades_open[(trades_open_slot + d_index)]
-        if current_trading_slot
+        current_trading_slot = @view(trades_open[(trades_open_slot + d_index)])
+        if current_trading_slot[1]
             current_trade_column = "Trades_$(theta)t$(down_index)d"
-            current_trading_slot = false
+            println("trades $(Timestamp) close. Theta: $(theta), down_index: $(down_index)")
+            trades_open[(trades_open_slot + d_index)] = true
+            fill!(current_trading_slot, false)
             data[(data.Timestamp .== Timestamp), current_trade_column] = ["Trade_close"]
         end
     end
