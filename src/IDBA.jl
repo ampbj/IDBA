@@ -24,6 +24,8 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
     end
     #make sure data is unique
     unique!(data)
+    sort!(thetas)
+    sort!(down_ind)
     return data, thetas, down_ind
 end
 
@@ -50,7 +52,7 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         insertcols!(data, "Exp_$(theta)" => ext_column)
         for down_index in down_ind
             down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
-            levels!(down_index_column, ["Trade_open", "Trade_close"]; allowmissing=true)
+            #levels!(down_index_column, ["Trade_open", "Trade_close"]; allowmissing=true)
             down_index_column = compress(down_index_column)
             insertcols!(data, "Trades_$(theta)t$(down_index)d" => down_index_column)
         end
@@ -58,27 +60,27 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
     return data, thetas, down_ind
 end
 
-function trade_open(data, Timestamp, theta, OSV, down_ind, trades_open, trades_open_slot)
+function trade_open(data, Timestamp, theta, OSV, down_ind, trade_open_array, current_partOf_trade_open_array, trade_enumerators)
     for (d_index, down_index) in enumerate(down_ind)
         if OSV <= down_index
-            if !trades_open[(trades_open_slot + d_index)]
+            right_index_number = current_partOf_trade_open_array + d_index
+            if !trade_open_array[right_index_number]
                 current_trade_column = "Trades_$(theta)t$(down_index)d"
-                println("trades $(Timestamp) open. Theta: $(theta), down_index: $(down_index)")
-                fill!(@view(trades_open[(trades_open_slot + d_index)]), true)
-                data[(data.Timestamp .== Timestamp), current_trade_column] = ["Trade_open"]
+                fill!(@view(trade_open_array[right_index_number]), true)
+                @view(trade_enumerators[right_index_number])[1] += 1
+                data[(data.Timestamp .== Timestamp), current_trade_column] = ["Open#$(trade_enumerators[right_index_number])"]
             end
         end
     end
 end
-function trade_close(data, Timestamp, theta, down_ind, trades_open, trades_open_slot)
+function trade_close(data, Timestamp, theta, down_ind, trade_open_array, current_partOf_trade_open_array, trade_enumerators)
     for (d_index, down_index) in enumerate(down_ind)
-        current_trading_slot = @view(trades_open[(trades_open_slot + d_index)])
+        right_index_number = current_partOf_trade_open_array + d_index
+        current_trading_slot = @view(trade_open_array[right_index_number])
         if current_trading_slot[1]
             current_trade_column = "Trades_$(theta)t$(down_index)d"
-            println("trades $(Timestamp) close. Theta: $(theta), down_index: $(down_index)")
-            trades_open[(trades_open_slot + d_index)] = true
             fill!(current_trading_slot, false)
-            data[(data.Timestamp .== Timestamp), current_trade_column] = ["Trade_close"]
+            data[(data.Timestamp .== Timestamp), current_trade_column] = ["Close#$(trade_enumerators[right_index_number])"]
         end
     end
 end
@@ -93,11 +95,12 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     DC_highest_price_time = repeat([data[1, :Timestamp]], theta_length)
     DC_lowest_price_time = repeat([data[1, :Timestamp]], theta_length)
     last_downtrend_PDCC = zeros(theta_length)
-    trades_open = repeat([false], (theta_length * down_ind_length))
+    trade_open_array = repeat([false], (theta_length * down_ind_length))
+    trade_enumerators = zeros(Int64, (theta_length * down_ind_length))
     function fit_implementation(row, index, theta, down_ind)
         current_theta_column = "Theta_$(theta)"
         current_exp_column = "Exp_$(theta)"
-        trades_open_slot = (index - 1) * down_ind_length
+        current_partOf_trade_open_array = (index - 1) * down_ind_length
         if DC_event[index] == "downtrend" || DC_event[index] == "init"
             if row.Close >= DC_lowest_price[index] * (1 + theta)
                 DC_event[index] = "uptrend"
@@ -105,12 +108,13 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
                 data[data.Timestamp .== DC_lowest_price_time[index], current_exp_column] = ["DXP"]
                 DC_highest_price[index] = row.Close
                 DC_highest_price_time[index] = row.Timestamp
-                trade_close(data, row.Timestamp, theta, down_ind, trades_open, trades_open_slot)
+                trade_close(data, row.Timestamp, theta, down_ind, trade_open_array, current_partOf_trade_open_array, trade_enumerators)
 
+            #if we still in a downtrend we check whether we can do a trade.
             elseif !iszero(last_downtrend_PDCC[index])
                 PDCC = last_downtrend_PDCC[index]
                 OSV = ((row.Close - PDCC) / PDCC) / theta
-                trade_open(data, row.Timestamp, theta, OSV, down_ind, trades_open, trades_open_slot)
+                trade_open(data, row.Timestamp, theta, OSV, down_ind, trade_open_array, current_partOf_trade_open_array, trade_enumerators)
             end
 
             if row.Close <= DC_lowest_price[index]
