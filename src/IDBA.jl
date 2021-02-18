@@ -144,7 +144,10 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     return data
 end
 
-function find_best_theta_down_index(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
-    
+function find_best_theta_down_index(data::DataFrame)
+    trades_df = data[!, r"Trades_"]
+    for col in eachcol(trades_df)
+        notempty_rows = col[.!ismissing.(col), :]
+    end
 end
 end
