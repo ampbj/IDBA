@@ -22,7 +22,7 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
     if !isassigned(down_ind, theta_length)
         error("we need to have same number of down_inds' as thetas'")
     end
-    #make sure data is unique
+    # make sure data is unique
     unique!(data)
     sort!(thetas)
     sort!(down_ind)
@@ -52,8 +52,6 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         insertcols!(data, "Exp_$(theta)" => ext_column)
         for down_index in down_ind
             down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
-            #levels!(down_index_column, ["Trade_open", "Trade_close"]; allowmissing=true)
-            down_index_column = compress(down_index_column)
             insertcols!(data, "Trades_$(theta)t$(down_index)d" => down_index_column)
         end
     end
@@ -110,7 +108,7 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
                 DC_highest_price_time[index] = row.Timestamp
                 trade_close(data, row.Timestamp, theta, down_ind, trade_open_array, current_partOf_trade_open_array, trade_enumerators)
 
-            #if we still in a downtrend we check whether we can do a trade.
+            # if we still in a downtrend we check whether we can do a trade.
             elseif !iszero(last_downtrend_PDCC[index])
                 PDCC = last_downtrend_PDCC[index]
                 OSV = ((row.Close - PDCC) / PDCC) / theta
