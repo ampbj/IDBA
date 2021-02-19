@@ -145,9 +145,22 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
 end
 
 function find_best_theta_down_index(data::DataFrame)
-    trades_df = data[!, r"Trades_"]
-    for col in eachcol(trades_df)
-        notempty_rows = col[.!ismissing.(col), :]
+    prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
+    trades_column_names = names(data[!, r"Trades_"])
+    df = @view data[!, [prices_vec...,trades_column_names...]]
+    for col_name in trades_column_names
+        non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
+        numberOf_rows = nrow(non_empty_rows)
+        if !iszero(numberOf_rows)
+            offset = 1
+            for index in 1:2:numberOf_rows
+                trade_tuple = @view non_empty_rows[index:(index+offset), :]
+                trades_names = @view trade_tuple[:, col_name]
+                first = match(r"^\w*#(\d*)", levels(trades_names[1])[1])
+                second = match(r"^\w*#(\d*)", levels(trades_names[2])[1])
+                println("first: $(first[1]), second: $(second[1])")
+            end
+        end
     end
 end
 end
