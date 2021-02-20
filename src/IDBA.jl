@@ -144,23 +144,47 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     return data
 end
 
-function find_best_theta_down_index(data::DataFrame)
+function check_trade_numbers(trades_names)
+    open_trade_number = match(r"^\w*#(\d*)", String(trades_names[1]))[1]
+    close_trade_number = match(r"^\w*#(\d*)", String(trades_names[2]))[1]
+    if open_trade_number != close_trade_number
+        error("Open trade: $(open_trade_number) 
+            is not paired against it's close trade: $(close_trade_number)")
+    else
+        return(open_trade_number)
+    end
+end
+
+function calculate_trade_analytics(trade_number::Number, analytics_dataframe::DataFrame, trade_tuple, initial_capital::Float64)
+    
+end
+
+function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
-    for col_name in trades_column_names
+    analytics_dataframes = Array{DataFrame,1}(undef, length(trades_column_names))
+    for (col_index, col_name) in enumerate(trades_column_names)
         non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
+            analytics_df = DataFrame(P_L=zeros(numberOf_rows), Capital=zeros(numberOf_rows), DD=zeros(numberOf_rows))
+            insert!(analytics_dataframes, col_index, analytics_df)
+            analytics_dataframe = @view analytics_dataframes[col_index]
             for index in 1:2:numberOf_rows
-                trade_tuple = @view non_empty_rows[index:(index+offset), :]
-                trades_names = @view trade_tuple[:, col_name]
-                first = match(r"^\w*#(\d*)", levels(trades_names[1])[1])
-                second = match(r"^\w*#(\d*)", levels(trades_names[2])[1])
-                println("first: $(first[1]), second: $(second[1])")
+                # making sure that we are not asking for out of bound rows.
+                if index + offset <= numberOf_rows
+                    trade_tuple = @view non_empty_rows[index:(index + offset), :]
+                    trades_names = @view trade_tuple[:, col_name]
+                    trade_number  = check_trade_numbers(trades_names)
+                    calculate_trade_analytics(trade_number, analytics_dataframe, trade_tuple, initial_capital)
+                end
             end
+        else
+            println("Trade Column $(col_name) does not contain any trade")
         end
     end
 end
+
 end
