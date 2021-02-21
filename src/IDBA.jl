@@ -163,34 +163,36 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
     p_l = round((bid_price - ask_price), digits=6)
     tt =  Dates.format(convert(DateTime, (sell_time - buy_time)), "MM:SS")
     capital = capital + p_l
-    maximum_capital = maximum(analytics_dataframe.Capital)
+    maximum_capital = maximum(.!ismissing.(analytics_dataframe.Capital))
     DD = (capital - maximum_capital) / maximum_capital
     analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, capital, DD]
     return capital
 end
 
 function find_highest_return(analytics_dataframes)
-    highest_return = @NamedTuple{name::String, return_value::Float64}
-    for (df_name, df) in analytics_dataframes
-        retrun_value = last(df[.!isnan.(df[!,:Capital]),:Capital])
-        if retrun_value > highest_return[:return_value]
+    highest_return = Dict(:name => "", :return_value => 0.0)
+    dfs = analytics_dataframes[.!ismissing.(analytics_dataframes)]
+    for (df_name, df) in dfs
+        last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
+        if last_return > highest_return[:return_value]
             highest_return[:name] = df_name
-            highest_return[:return_value] = retrun_value
+            highest_return[:return_value] = last_return
         end
     end
     return highest_return
 end
+
 function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
-    analytics_dataframes = Array{Pair{String,DataFrame},1}(undef, length(trades_column_names))
+    analytics_dataframes = Array{Union{Pair{String,DataFrame},Missing},1}(missing, length(trades_column_names))
     for (col_index, col_name) in enumerate(trades_column_names)
         non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
-            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_rows), TT=Array{String,1}(undef, numberOf_rows), Capital=Array{Float64,1}(undef, numberOf_rows), DD=Array{Float64,1}(undef, numberOf_rows))
+            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_rows), TT=Array{Union{String,Missing},1}(missing, numberOf_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_rows))
             insert!(analytics_dataframes, col_index, col_name => analytics_df)
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
