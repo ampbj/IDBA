@@ -155,36 +155,58 @@ function check_trade_numbers(trades_names)
     end
 end
 
-function calculate_trade_analytics(trade_number::Number, analytics_dataframe::DataFrame, trade_tuple, initial_capital::Float64)
-    
+function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, capital::Float64)
+    # When buying use Ask price. When selling use Bid price.
+    convert(Int64, trade_number)
+    buy_time, ask_price = trade_tuple[1,[:Timestamp, :Ask]]
+    sell_time, bid_price = trade_tuple[2,[:Timestamp, :Bid]]
+    p_l = round((bid_price - ask_price), digits=6)
+    tt =  Dates.format(convert(DateTime, (sell_time - buy_time)), "MM:SS")
+    capital = capital + p_l
+    maximum_capital = maximum(analytics_dataframe.Capital)
+    DD = (capital - maximum_capital) / maximum_capital
+    analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, capital, DD]
+    return capital
 end
 
+function find_highest_return(analytics_dataframes)
+    highest_return = @NamedTuple{name::String, return_value::Float64}
+    for (df_name, df) in analytics_dataframes
+        retrun_value = last(df[.!isnan.(df[!,:Capital]),:Capital])
+        if retrun_value > highest_return[:return_value]
+            highest_return[:name] = df_name
+            highest_return[:return_value] = retrun_value
+        end
+    end
+    return highest_return
+end
 function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
-    analytics_dataframes = Array{DataFrame,1}(undef, length(trades_column_names))
+    analytics_dataframes = Array{Pair{String,DataFrame},1}(undef, length(trades_column_names))
     for (col_index, col_name) in enumerate(trades_column_names)
         non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
-            analytics_df = DataFrame(P_L=zeros(numberOf_rows), Capital=zeros(numberOf_rows), DD=zeros(numberOf_rows))
-            insert!(analytics_dataframes, col_index, analytics_df)
-            analytics_dataframe = @view analytics_dataframes[col_index]
+            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_rows), TT=Array{String,1}(undef, numberOf_rows), Capital=Array{Float64,1}(undef, numberOf_rows), DD=Array{Float64,1}(undef, numberOf_rows))
+            insert!(analytics_dataframes, col_index, col_name => analytics_df)
+            analytics_dataframe = analytics_dataframes[col_index]
+            capital = initial_capital
+            analytics_df[1,:Capital] = initial_capital
             for index in 1:2:numberOf_rows
                 # making sure that we are not asking for out of bound rows.
                 if index + offset <= numberOf_rows
                     trade_tuple = @view non_empty_rows[index:(index + offset), :]
                     trades_names = @view trade_tuple[:, col_name]
-                    trade_number  = check_trade_numbers(trades_names)
-                    calculate_trade_analytics(trade_number, analytics_dataframe, trade_tuple, initial_capital)
+                    trade_number  = parse(Int64, check_trade_numbers(trades_names))
+                    capital = calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, capital)
                 end
             end
-        else
-            println("Trade Column $(col_name) does not contain any trade")
         end
     end
-end
+    return (find_highest_return(analytics_dataframes), analytics_dataframes)
+end 
 
 end
