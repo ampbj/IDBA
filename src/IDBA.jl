@@ -233,6 +233,11 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
             counter += 1
         end
     end
-    return result_array
+    dicts = first.(result_array)
+    maximum_return = maximum(get.(dicts, :return_value, 0))
+    maximum_return_name = [k for (k, v) in dicts if v.second == maximum_return]
+    maximum_return_name = maximum_return_name[1].second
+    max_dict = Dict(:best_parameters => maximum_return_name, :maximum_return => maximum_return)
+    return max_dict, result_array
 end
 end
