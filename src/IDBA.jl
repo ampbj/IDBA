@@ -222,7 +222,7 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     (data, thetas, down_ind) = init(data_path, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
-    result_array = Array{Tuple{Dict,Array{String,1}},1}(undef, length(theta_batches))
+    result_array = Array{Tuple{Dict,Array{String,1}},1}(undef, length(theta_batches) * length(down_ind_batches))
     counter = 1
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
