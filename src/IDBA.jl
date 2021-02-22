@@ -17,11 +17,11 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
         error("Data is not aligned with the required structure!
                     Module expects at least Timestamp,Close and Ask columns")
     end
-    # Dealing with theta and down_inds'
-    theta_length = length(thetas)
-    if !isassigned(down_ind, theta_length)
-        error("we need to have same number of down_inds' as thetas'")
-    end
+    # # Dealing with theta and down_inds'
+    # theta_length = length(thetas)
+    # if !isassigned(down_ind, theta_length)
+    #     error("we need to have same number of down_inds' as thetas'")
+    # end
     # make sure data is unique
     unique!(data)
     sort!(thetas)
@@ -155,16 +155,23 @@ function check_trade_numbers(trades_names)
     end
 end
 
-function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, capital::Float64)
+function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, capital::Float64, initial_capital)
     # When buying use Ask price. When selling use Bid price.
     convert(Int64, trade_number)
     buy_time, ask_price = trade_tuple[1,[:Timestamp, :Ask]]
     sell_time, bid_price = trade_tuple[2,[:Timestamp, :Bid]]
-    p_l = round((bid_price - ask_price), digits=6)
+    p_l = round(((bid_price * capital) - (ask_price * capital)), digits=5)
     tt =  Dates.format(convert(DateTime, (sell_time - buy_time)), "MM:SS")
-    capital = capital + p_l
-    maximum_capital = maximum(.!ismissing.(analytics_dataframe.Capital))
-    DD = (capital - maximum_capital) / maximum_capital
+    capital = round(capital + p_l, digits=2)
+    maximum_capital = 0
+    all_capitals = analytics_dataframe[.!ismissing.(analytics_dataframe.Capital), :Capital]
+    if !isempty(all_capitals)
+        maximum_capital = maximum(all_capitals)
+    end
+    if maximum_capital < initial_capital
+        maximum_capital = initial_capital
+    end
+    DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
     analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, capital, DD]
     return capital
 end
@@ -192,18 +199,18 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
-            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_rows), TT=Array{Union{String,Missing},1}(missing, numberOf_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_rows))
+            numberOf_df_rows = Int(ceil(numberOf_rows / 2))
+            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), TT=Array{Union{String,Missing},1}(missing, numberOf_df_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows))
             insert!(analytics_dataframes, col_index, col_name => analytics_df)
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
-            analytics_df[1,:Capital] = initial_capital
             for index in 1:2:numberOf_rows
                 # making sure that we are not asking for out of bound rows.
                 if index + offset <= numberOf_rows
                     trade_tuple = @view non_empty_rows[index:(index + offset), :]
                     trades_names = @view trade_tuple[:, col_name]
                     trade_number  = parse(Int64, check_trade_numbers(trades_names))
-                    capital = calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, capital)
+                    capital = calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, capital, initial_capital)
                 end
             end
         end
@@ -211,4 +218,21 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     return (find_highest_return(analytics_dataframes), analytics_dataframes)
 end 
 
+function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64)
+    (data, thetas, down_ind) = init(data_path, thetas, down_ind)
+    theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
+    down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
+    reusult_array = Array{Tuple{Dict{Symbol,Any},Array{Union{Missing, Pair{String,DataFrame}},1}},1}(undef, (length(thetas) * length(down_ind)))
+    counter = 1
+    for theta_batch in theta_batches
+        for down_ind_batch in down_ind_batches
+            (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch)
+            trades = fit(data_prepared, theta_batch, down_ind_batch)
+            (best, df) = find_best_theta_down_index(trades, initial_capital)
+            insert!(reusult_array, counter, (best, df))
+            counter += 1
+        end
+    end
+    return reusult_array
+end
 end
