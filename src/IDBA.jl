@@ -201,7 +201,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
             offset = 1
             numberOf_df_rows = Int(ceil(numberOf_rows / 2))
             analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), TT=Array{Union{String,Missing},1}(missing, numberOf_df_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows))
-            insert!(analytics_dataframes, col_index, col_name => analytics_df)
+            analytics_dataframes[col_index] = col_name => analytics_df
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
             for index in 1:2:numberOf_rows
@@ -215,24 +215,24 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
             end
         end
     end
-    return (find_highest_return(analytics_dataframes), analytics_dataframes)
+    return (find_highest_return(analytics_dataframes), trades_column_names, analytics_dataframes)
 end 
 
 function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64)
     (data, thetas, down_ind) = init(data_path, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
-    reusult_array = Array{Tuple{Dict{Symbol,Any},Array{Union{Missing, Pair{String,DataFrame}},1}},1}(undef, (length(thetas) * length(down_ind)))
+    result_array = Array{Tuple{Dict,Array{String,1}},1}(undef, length(theta_batches))
     counter = 1
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
             (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch)
             trades = fit(data_prepared, theta_batch, down_ind_batch)
-            (best, df) = find_best_theta_down_index(trades, initial_capital)
-            insert!(reusult_array, counter, (best, df))
+            (best, trades_column_names, df) = find_best_theta_down_index(trades, initial_capital)
+            result_array[counter] = best, trades_column_names
             counter += 1
         end
     end
-    return reusult_array
+    return result_array
 end
 end
