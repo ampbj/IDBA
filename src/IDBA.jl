@@ -17,12 +17,6 @@ function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Abs
         error("Data is not aligned with the required structure!
                     Module expects at least Timestamp,Close and Ask columns")
     end
-    # # Dealing with theta and down_inds'
-    # theta_length = length(thetas)
-    # if !isassigned(down_ind, theta_length)
-    #     error("we need to have same number of down_inds' as thetas'")
-    # end
-    # make sure data is unique
     unique!(data)
     sort!(thetas)
     sort!(down_ind)
@@ -215,29 +209,37 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
             end
         end
     end
-    return (find_highest_return(analytics_dataframes), trades_column_names, analytics_dataframes)
+    highest_return_dict = find_highest_return(analytics_dataframes)
+    params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
+    theta = params[1]
+    highest_return_analytics_df = [pair.second for pair in analytics_dataframes if pair.first == highest_return_dict[:name]]
+    highest_return_analytics_df = first(highest_return_analytics_df)
+    mdd = maximum(highest_return_analytics_df.DD)
+    push!(highest_return_dict, :MDD => mdd)
+    highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
+    return (highest_return_dict, highest_return_original_df, highest_return_analytics_df)
 end 
 
 function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64)
     (data, thetas, down_ind) = init(data_path, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
-    result_array = Array{Tuple{Dict,Array{String,1}},1}(undef, length(theta_batches) * length(down_ind_batches))
+    result_array = Array{Tuple{Dict,DataFrame,DataFrame},1}(undef, length(theta_batches) * length(down_ind_batches))
     counter = 1
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
             (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch)
             trades = fit(data_prepared, theta_batch, down_ind_batch)
-            (best, trades_column_names, df) = find_best_theta_down_index(trades, initial_capital)
-            result_array[counter] = best, trades_column_names
+            (highest_return_dict, best_original_df, best_analytics_df) = find_best_theta_down_index(trades, initial_capital)
+            result_array[counter] = (highest_return_dict, best_analytics_df, best_original_df)
             counter += 1
         end
     end
     dicts = first.(result_array)
     maximum_return = maximum(get.(dicts, :return_value, 0))
-    maximum_return_name = [k for (k, v) in dicts if v.second == maximum_return]
-    maximum_return_name = maximum_return_name[1].second
-    max_dict = Dict(:best_parameters => maximum_return_name, :maximum_return => maximum_return)
-    return max_dict, result_array
+    maximum_dict = [dic for dic in dicts if dic[:return_value] == maximum_return]
+    maximum_dict = first(maximum_dict)
+    final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
+    return first(final_array_element)
 end
 end
