@@ -155,7 +155,7 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
     buy_time, ask_price = trade_tuple[1,[:Timestamp, :Ask]]
     sell_time, bid_price = trade_tuple[2,[:Timestamp, :Bid]]
     p_l = round(((bid_price * capital) - (ask_price * capital)), digits=5)
-    tt =  Dates.format(convert(DateTime, (sell_time - buy_time)), "MM:SS")
+    tt =  Dates.Minute(sell_time - buy_time)
     capital = round(capital + p_l, digits=2)
     maximum_capital = 0
     all_capitals = analytics_dataframe[.!ismissing.(analytics_dataframe.Capital), :Capital]
@@ -194,7 +194,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
         if !iszero(numberOf_rows)
             offset = 1
             numberOf_df_rows = Int(ceil(numberOf_rows / 2))
-            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), TT=Array{Union{String,Missing},1}(missing, numberOf_df_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows))
+            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), TT=Array{Union{Minute,Missing},1}(missing, numberOf_df_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows))
             analytics_dataframes[col_index] = col_name => analytics_df
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
@@ -212,10 +212,11 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     highest_return_dict = find_highest_return(analytics_dataframes)
     params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
     theta = params[1]
-    highest_return_analytics_df = [pair.second for pair in analytics_dataframes if pair.first == highest_return_dict[:name]]
+    highest_return_analytics_df = [pair.second for pair in analytics_dataframes if !ismissing(pair) && pair.first == highest_return_dict[:name]]
     highest_return_analytics_df = first(highest_return_analytics_df)
     mdd = maximum(highest_return_analytics_df.DD)
     push!(highest_return_dict, :MDD => mdd)
+    push!(highest_return_dict, :Theta => theta)
     highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
     return (highest_return_dict, highest_return_original_df, highest_return_analytics_df)
 end 
@@ -241,5 +242,28 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     maximum_dict = first(maximum_dict)
     final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
     return first(final_array_element)
+end
+
+function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
+    dict = tuple[1]
+    theta = dict[:Theta]
+    trades_column = Symbol(dict[:name])
+    exp_column = Symbol("Exp_$(theta)")
+    analytics_df = tuple[2]
+    number_of_trades = nrow(analytics_df)
+    ML_df = DataFrame(SDT=Array{Union{Float64,Missing},1}(missing, number_of_trades), 
+            TBO=Array{Union{Minute,Missing},1}(missing, number_of_trades), 
+            Profitable=Array{Union{Bool,Missing},1}(missing, number_of_trades))
+    original_df = tuple[3]
+    trades_df = @view original_df[.!ismissing.(original_df[!,trades_column]) .| .!ismissing.(original_df[!,exp_column]), :]
+    rows = Tables.namedtupleiterator(trades_df)
+    for (index, row) in enumerate(rows)
+        if !ismissing(row[trades_column]) && (startswith(String(row[trades_column]), "Open#"))
+            previous_rows = @view trades_df[1:index, :]
+            exps = previous_rows[.!ismissing.(previous_rows[!, exp_column]),:]
+            last_uxp = last(exps[exps[!, exp_column] .== "UXP", :])
+            TBO = Dates.Minute(row.Timestamp - last_uxp.Timestamp)
+        end
+    end
 end
 end
