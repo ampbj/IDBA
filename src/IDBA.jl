@@ -3,8 +3,8 @@ module IDBA
 using Dates
 using DataFrames
 using CSV
-using MySQL
 using CategoricalArrays
+using Statistics
 
 function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
@@ -251,7 +251,7 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
     exp_column = Symbol("Exp_$(theta)")
     analytics_df = tuple[2]
     number_of_trades = nrow(analytics_df)
-    ML_df = DataFrame(SDT=Array{Union{Float64,Missing},1}(missing, number_of_trades), 
+    ML_df = DataFrame(STD=Array{Union{Float64,Missing},1}(missing, number_of_trades), 
             TBO=Array{Union{Minute,Missing},1}(missing, number_of_trades), 
             Profitable=Array{Union{Bool,Missing},1}(missing, number_of_trades))
     original_df = tuple[3]
@@ -259,11 +259,31 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
     rows = Tables.namedtupleiterator(trades_df)
     for (index, row) in enumerate(rows)
         if !ismissing(row[trades_column]) && (startswith(String(row[trades_column]), "Open#"))
+            trade_number = parse(Int64, match(r"Open#(\d*)", String(row[trades_column]))[1])
             previous_rows = @view trades_df[1:index, :]
             exps = previous_rows[.!ismissing.(previous_rows[!, exp_column]),:]
             last_uxp = last(exps[exps[!, exp_column] .== "UXP", :])
-            TBO = Dates.Minute(row.Timestamp - last_uxp.Timestamp)
+
+            # calculating TBO for classification.
+            uxp_time = last_uxp.Timestamp
+            open_trade_time = row.Timestamp
+            TBO = Dates.Minute(open_trade_time - uxp_time)
+
+            # calculating profitability as a label
+            profitability = analytics_df[trade_number, "P_L"] > 0 ? true : false
+
+            # calculating STD of downtrend period
+            close_price_period = original_df[(original_df.Timestamp .>= uxp_time) .& (original_df.Timestamp .<=  open_trade_time), "Close"]
+            close_price_std = std(close_price_period)
+
+            # fill ML df
+            ML_df[trade_number,[:STD, :TBO, :Profitable]] = [close_price_std, TBO, profitability]
         end
     end
+    return ML_df
 end
+
+function classification(df)
+end
+
 end
