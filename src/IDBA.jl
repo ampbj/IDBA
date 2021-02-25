@@ -5,6 +5,7 @@ using DataFrames
 using CSV
 using CategoricalArrays
 using Statistics
+using DecisionTree
 
 function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
@@ -284,6 +285,17 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
 end
 
 function classification(df)
+    if eltype(df.TBO) == Union{Missing,Minute}
+        df.TBO = Dates.value.(df.TBO)
+    end
+    features = convert(Array, df[:,[:STD, :TBO]])
+    labels = df.Profitable
+
+    # model prediction using DecisionTree
+    model = DecisionTreeClassifier(max_depth=2)
+    fit!(model, features, labels)
+    print_tree(model, 5)
+    
 end
 
 end
