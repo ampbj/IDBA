@@ -5,7 +5,7 @@ using DataFrames
 using CSV
 using CategoricalArrays
 using Statistics
-using DecisionTree
+using MLJ
 
 function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
@@ -173,12 +173,13 @@ end
 
 function find_highest_return(analytics_dataframes)
     highest_return = Dict(:name => "", :return_value => 0.0)
-    dfs = analytics_dataframes[.!ismissing.(analytics_dataframes)]
-    for (df_name, df) in dfs
-        last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
-        if last_return > highest_return[:return_value]
-            highest_return[:name] = df_name
-            highest_return[:return_value] = last_return
+    if (!isempty(analytics_dataframes))
+        for (df_name, df) in analytics_dataframes
+            last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
+            if last_return > highest_return[:return_value]
+                highest_return[:name] = df_name
+                highest_return[:return_value] = last_return
+            end
         end
     end
     return highest_return
@@ -188,14 +189,14 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
-    analytics_dataframes = Array{Union{Pair{String,DataFrame},Missing},1}(missing, length(trades_column_names))
+    analytics_dataframes = Array{Pair{String,DataFrame},1}(undef, length(trades_column_names))
     for (col_index, col_name) in enumerate(trades_column_names)
         non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
             numberOf_df_rows = Int(ceil(numberOf_rows / 2))
-            analytics_df = DataFrame(P_L=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), TT=Array{Union{Minute,Missing},1}(missing, numberOf_df_rows), Capital=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows), DD=Array{Union{Float64,Missing},1}(missing, numberOf_df_rows))
+            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_df_rows), TT=Array{Minute,1}(undef, numberOf_df_rows), Capital=Array{Float64,1}(undef, numberOf_df_rows), DD=Array{Float64,1}(undef, numberOf_df_rows))
             analytics_dataframes[col_index] = col_name => analytics_df
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
@@ -210,6 +211,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
             end
         end
     end
+    analytics_dataframes = analytics_dataframes[filter(i -> isassigned(analytics_dataframes, i), 1:length(analytics_dataframes))]
     highest_return_dict = find_highest_return(analytics_dataframes)
     params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
     theta = params[1]
@@ -252,9 +254,9 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
     exp_column = Symbol("Exp_$(theta)")
     analytics_df = tuple[2]
     number_of_trades = nrow(analytics_df)
-    ML_df = DataFrame(STD=Array{Union{Float64,Missing},1}(missing, number_of_trades), 
-            TBO=Array{Union{Minute,Missing},1}(missing, number_of_trades), 
-            Profitable=Array{Union{Bool,Missing},1}(missing, number_of_trades))
+    ML_df = DataFrame(STD=Array{Float64,1}(undef, number_of_trades), 
+            TBO=Array{Minute,1}(undef, number_of_trades),
+            Profitable=CategoricalArray{String}(undef, number_of_trades))
     original_df = tuple[3]
     trades_df = @view original_df[.!ismissing.(original_df[!,trades_column]) .| .!ismissing.(original_df[!,exp_column]), :]
     rows = Tables.namedtupleiterator(trades_df)
@@ -271,7 +273,7 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
             TBO = Dates.Minute(open_trade_time - uxp_time)
 
             # calculating profitability as a label
-            profitability = analytics_df[trade_number, "P_L"] > 0 ? true : false
+            profitability = analytics_df[trade_number, "P_L"] > 0 ? "Yes" : "No"
 
             # calculating STD of downtrend period
             close_price_period = original_df[(original_df.Timestamp .>= uxp_time) .& (original_df.Timestamp .<=  open_trade_time), "Close"]
@@ -285,17 +287,18 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
 end
 
 function classification(df)
-    if eltype(df.TBO) == Union{Missing,Minute}
-        df.TBO = Dates.value.(df.TBO)
+    if eltype(df.TBO) == Minute
+        df.TBO = Float64.(Dates.value.(df.TBO))
     end
-    features = convert(Array, df[:,[:STD, :TBO]])
-    labels = df.Profitable
+    y, X = unpack(df, ==(:Profitable), colname -> true)
+    y = coerce(y, OrderedFactor)
+    decisionTree(y, X)
+end
 
+function decisionTree(y, X)
     # model prediction using DecisionTree
-    model = DecisionTreeClassifier(max_depth=2)
-    fit!(model, features, labels)
-    print_tree(model, 5)
-    
+    Tree = @iload DecisionTreeClassifier pkg = DecisionTree
+    tree = Tree()
 end
 
 end
