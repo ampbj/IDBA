@@ -12,6 +12,7 @@ DecisionTree = "7806a523-6efd-50cb-b5f6-3fa6f1930dbb"
 MySQL = "39abe10b-433b-5dbd-92d4-e302a9df00cd"
 
 [compat]
+DecisionTree = "0.10"
 julia = "1"
 
 [extras]
