@@ -186,7 +186,7 @@ function find_highest_return(analytics_dataframes)
 end
 
 function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
-    prices_vec = ["Timestamp", "Close", "Ask", "Bid"]
+    prices_vec = ["Timestamp", "Close", "Ask", "Bid", "pct_change"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
     analytics_dataframes = Array{Pair{String,DataFrame},1}(undef, length(trades_column_names))
@@ -292,6 +292,7 @@ function classification(df)
     end
     y, X = unpack(df, ==(:Profitable), colname -> true)
     y = coerce(y, OrderedFactor)
+    compat_models = models(matching(X, y))
     decisionTree(y, X)
 end
 
