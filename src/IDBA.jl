@@ -292,14 +292,15 @@ function classification(df)
     end
     y, X = unpack(df, ==(:Profitable), colname -> true)
     y = coerce(y, OrderedFactor)
-    compat_models = models(matching(X, y))
-    decisionTree(y, X)
+    mstd = machine(Standardizer(), X)
+    decisionTree(y, mstd)
 end
 
 function decisionTree(y, X)
     # model prediction using DecisionTree
     Tree = @iload DecisionTreeClassifier pkg = DecisionTree
     tree = Tree()
+    clf = machine(tree, X, y)
 end
 
 end
