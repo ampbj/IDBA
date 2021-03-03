@@ -158,15 +158,25 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
     p_l = round(((bid_price * capital) - (ask_price * capital)), digits=5)
     tt =  Dates.Minute(sell_time - buy_time)
     capital = round(capital + p_l, digits=2)
-    maximum_capital = 0
-    all_capitals = analytics_dataframe[.!ismissing.(analytics_dataframe.Capital), :Capital]
-    if !isempty(all_capitals)
-        maximum_capital = maximum(all_capitals)
+    # Calculating drawdown:
+    DD = undef
+    if p_l < 0
+        maximum_capital = 0
+        all_capitals = analytics_dataframe[.!ismissing.(analytics_dataframe.Capital), :Capital]
+        if !isempty(all_capitals)
+            maximum_capital = maximum(all_capitals)
+        end
+        if maximum_capital < initial_capital
+            maximum_capital = initial_capital
+        end
+        DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
+    else
+        all_dds = analytics_dataframe[!, :DD]
+        if !isempty(all_dds)
+            DD = maximum(all_dds)
+        end
     end
-    if maximum_capital < initial_capital
-        maximum_capital = initial_capital
-    end
-    DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
+    # End of DD calculation
     analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, capital, DD]
     return capital
 end
@@ -196,7 +206,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
         if !iszero(numberOf_rows)
             offset = 1
             numberOf_df_rows = Int(ceil(numberOf_rows / 2))
-            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_df_rows), TT=Array{Minute,1}(undef, numberOf_df_rows), Capital=Array{Float64,1}(undef, numberOf_df_rows), DD=Array{Float64,1}(undef, numberOf_df_rows))
+            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_df_rows), TT=Array{Minute,1}(undef, numberOf_df_rows), Capital=Array{Float64,1}(undef, numberOf_df_rows), DD=zeros(numberOf_df_rows))
             analytics_dataframes[col_index] = col_name => analytics_df
             analytics_dataframe = analytics_dataframes[col_index]
             capital = initial_capital
