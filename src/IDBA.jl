@@ -183,13 +183,11 @@ end
 
 function find_highest_return(analytics_dataframes)
     highest_return = Dict(:name => "", :return_value => 0.0)
-    if (!isempty(analytics_dataframes))
-        for (df_name, df) in analytics_dataframes
-            last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
-            if last_return > highest_return[:return_value]
-                highest_return[:name] = df_name
-                highest_return[:return_value] = last_return
-            end
+    for (df_name, df) in analytics_dataframes
+        last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
+        if last_return > highest_return[:return_value]
+            highest_return[:name] = df_name
+            highest_return[:return_value] = last_return
         end
     end
     return highest_return
@@ -222,16 +220,20 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
         end
     end
     analytics_dataframes = analytics_dataframes[filter(i -> isassigned(analytics_dataframes, i), 1:length(analytics_dataframes))]
-    highest_return_dict = find_highest_return(analytics_dataframes)
-    params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
-    theta = params[1]
-    highest_return_analytics_df = [pair.second for pair in analytics_dataframes if !ismissing(pair) && pair.first == highest_return_dict[:name]]
-    highest_return_analytics_df = first(highest_return_analytics_df)
-    mdd = maximum(highest_return_analytics_df.DD)
-    push!(highest_return_dict, :MDD => mdd)
-    push!(highest_return_dict, :Theta => theta)
-    highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
-    return (highest_return_dict, highest_return_original_df, highest_return_analytics_df)
+    if !isempty(analytics_dataframes)
+        highest_return_dict = find_highest_return(analytics_dataframes)
+        params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
+        theta = params[1]
+        highest_return_analytics_df = [pair.second for pair in analytics_dataframes if !ismissing(pair) && pair.first == highest_return_dict[:name]]
+        highest_return_analytics_df = first(highest_return_analytics_df)
+        mdd = maximum(highest_return_analytics_df.DD)
+        push!(highest_return_dict, :MDD => mdd)
+        push!(highest_return_dict, :Theta => theta)
+        highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
+        return (highest_return_dict, highest_return_original_df, highest_return_analytics_df)
+    else
+        return (Dict(:name => "", :return_value => 0.0), DataFrame(), DataFrame())
+    end
 end 
 
 function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64)
