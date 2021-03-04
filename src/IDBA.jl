@@ -172,7 +172,9 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
         if maximum_capital < initial_capital
             maximum_capital = initial_capital
         end
-        DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
+        if !isnan(maximum_capital) || maximum_capital != 0
+            DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
+        end
     else
         all_dds = analytics_dataframe[!, :DD]
         if !isempty(all_dds)
@@ -233,7 +235,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
         push!(highest_return_dict, :MDD => mdd)
         push!(highest_return_dict, :Theta => theta)
         highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
-        return (highest_return_dict, highest_return_original_df, highest_return_analytics_df)
+        return (highest_return_dict, highest_return_original_df, highest_return_analytics_df), analytics_dataframes
     else
         return (Dict(:name => "", :return_value => 0.0), DataFrame(), DataFrame())
     end
@@ -244,6 +246,7 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
     result_array = Array{Tuple{Dict,DataFrame,DataFrame},1}(undef, length(theta_batches) * length(down_ind_batches))
+    all_analytics_dfs = Array{Pair{String,DataFrame},1}(undef, 0)
     counter = 1
     progress_bar_size = ((nrow(data) * length(thetas)) + (length(thetas) * length(down_ind))) * (length(result_array))
     p = Progress(progress_bar_size)
@@ -251,10 +254,11 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
         for down_ind_batch in down_ind_batches
             (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch, p)
             trades = fit(data_prepared, theta_batch, down_ind_batch, p)
-            (highest_return_dict, best_original_df, best_analytics_df) = find_best_theta_down_index(trades, initial_capital)
+            (highest_return_dict, best_original_df, best_analytics_df), analytics_dataframes = find_best_theta_down_index(trades, initial_capital)
             result_array[counter] = (highest_return_dict, best_analytics_df, best_original_df)
+            append!(all_analytics_dfs, analytics_dataframes)
             counter += 1
-            [next!(p) for i in 1:length(down_ind_batch)]
+            next!(p)
         end
     end
     dicts = first.(result_array)
@@ -262,7 +266,8 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     maximum_dict = [dic for dic in dicts if dic[:return_value] == maximum_return]
     maximum_dict = first(maximum_dict)
     final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
-    return first(final_array_element)
+    [next!(p) for i in 1:length(down_ind_batches)]
+    return first(final_array_element), all_analytics_dfs
 end
 
 function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
