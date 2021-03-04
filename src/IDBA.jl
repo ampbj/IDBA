@@ -49,7 +49,7 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         for down_index in down_ind
             down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
             insertcols!(data, "Trades_$(theta)t$(down_index)d" => down_index_column)
-            next!(p)
+            ProgressMeter.next!(p)
         end
     end
     return data, thetas, down_ind
@@ -136,7 +136,7 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     for row in rows
         for (index, theta) in enumerate(thetas)
             fit_implementation(row, index, theta, down_ind)
-            next!(p)
+            ProgressMeter.next!(p)
         end
     end
     return data
@@ -241,7 +241,7 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     end
 end 
 
-function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64)
+function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64; show_progress=true)
     (data, thetas, down_ind) = init(data_path, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
@@ -249,7 +249,7 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     all_analytics_dfs = Array{Pair{String,DataFrame},1}(undef, 0)
     counter = 1
     progress_bar_size = ((nrow(data) * length(thetas)) + (length(thetas) * length(down_ind))) * (length(result_array))
-    p = Progress(progress_bar_size)
+    p = Progress(progress_bar_size; enabled=show_progress)
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
             (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch, p)
@@ -258,7 +258,7 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
             result_array[counter] = (highest_return_dict, best_analytics_df, best_original_df)
             append!(all_analytics_dfs, analytics_dataframes)
             counter += 1
-            next!(p)
+            ProgressMeter.next!(p)
         end
     end
     dicts = first.(result_array)
@@ -266,7 +266,7 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     maximum_dict = [dic for dic in dicts if dic[:return_value] == maximum_return]
     maximum_dict = first(maximum_dict)
     final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
-    [next!(p) for i in 1:length(down_ind_batches)]
+    [ProgressMeter.next!(p) for i in 1:length(down_ind_batches)]
     return first(final_array_element), all_analytics_dfs
 end
 
