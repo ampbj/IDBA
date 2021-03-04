@@ -6,6 +6,7 @@ using CSV
 using CategoricalArrays
 using Statistics
 using MLJ
+using ProgressMeter
 
 function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
@@ -29,7 +30,7 @@ function pct_change(input::AbstractVector{<:Number}, period::Int=1)
     [fill(missing, period); res]
 end
 
-function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
+function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, p)
         # preparing dataframe for getting fit
     dropmissing!(insertcols!(data, :pct_change => pct_change(data.Close)))
     if eltype(data.Timestamp) !== DateTime
@@ -48,6 +49,7 @@ function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Ab
         for down_index in down_ind
             down_index_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
             insertcols!(data, "Trades_$(theta)t$(down_index)d" => down_index_column)
+            next!(p)
         end
     end
     return data, thetas, down_ind
@@ -78,7 +80,7 @@ function trade_close(data, Timestamp, theta, down_ind, trade_open_array, current
     end
 end
 
-function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
+function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, p)
     rows = Tables.namedtupleiterator(data)
     theta_length = length(thetas)
     down_ind_length = length(down_ind)
@@ -134,6 +136,7 @@ function fit(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::Abstra
     for row in rows
         for (index, theta) in enumerate(thetas)
             fit_implementation(row, index, theta, down_ind)
+            next!(p)
         end
     end
     return data
@@ -242,13 +245,16 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
     result_array = Array{Tuple{Dict,DataFrame,DataFrame},1}(undef, length(theta_batches) * length(down_ind_batches))
     counter = 1
+    progress_bar_size = ((nrow(data) * length(thetas)) + (length(thetas) * length(down_ind))) * (length(result_array))
+    p = Progress(progress_bar_size)
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
-            (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch)
-            trades = fit(data_prepared, theta_batch, down_ind_batch)
+            (data_prepared, _, _) = prepare(copy(data), theta_batch, down_ind_batch, p)
+            trades = fit(data_prepared, theta_batch, down_ind_batch, p)
             (highest_return_dict, best_original_df, best_analytics_df) = find_best_theta_down_index(trades, initial_capital)
             result_array[counter] = (highest_return_dict, best_analytics_df, best_original_df)
             counter += 1
+            [next!(p) for i in 1:length(down_ind_batch)]
         end
     end
     dicts = first.(result_array)
