@@ -230,13 +230,14 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
                     trades_names = @view trade_tuple[:, col_name]
                     trade_number  = parse(Int64, check_trade_numbers(trades_names))
                     calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital)
-                # what if we have open trades?
+                # what if we have open trades? Following will handle it.
                 elseif index == numberOf_rows
-                    println("$(col_name) has dangling open trade")
                     trade_row = non_empty_rows[index, :]
-                    trade_name = @view trade_row[:, col_name]
-                    trade_number = match(r"^\w*#(\d*)", String(trade_name))[1]
-                    push!(trade_row, data[end,[prices_vec..., col_name]])
+                    trade_name = trade_row[col_name]
+                    trade_number = parse(Int64, match(r"^\w*#(\d*)", String(trade_name))[1])
+                    end_row = data[end,[prices_vec..., col_name]]
+                    trade_row = DataFrame(trade_row)
+                    push!(trade_row, end_row)
                     calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_row, initial_capital)
                 end
             end
