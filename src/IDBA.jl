@@ -153,19 +153,23 @@ function check_trade_numbers(trades_names)
     end
 end
 
-function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, capital::Float64, initial_capital)
+function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, initial_capital)
     # When buying use Ask price. When selling use Bid price.
+    all_capitals = analytics_dataframe[.!iszero.(analytics_dataframe.Capital), :Capital]
+    last_capital = initial_capital
+    if !isempty(all_capitals)
+        last_capital = last(all_capitals)
+    end
     convert(Int64, trade_number)
     buy_time, ask_price = trade_tuple[1,[:Timestamp, :Ask]]
     sell_time, bid_price = trade_tuple[2,[:Timestamp, :Bid]]
-    p_l = round(((bid_price * capital) - (ask_price * capital)), digits=5)
+    p_l = round(((bid_price * last_capital) - (ask_price * last_capital)), digits=5)
     tt =  Dates.Minute(sell_time - buy_time)
-    capital = round(capital + p_l, digits=2)
+    current_capital = round(last_capital + p_l, digits=2)
     # Calculating drawdown:
-    DD = undef
+    DD = 0
     if p_l < 0
         maximum_capital = 0
-        all_capitals = analytics_dataframe[.!ismissing.(analytics_dataframe.Capital), :Capital]
         if !isempty(all_capitals)
             maximum_capital = maximum(all_capitals)
         end
@@ -173,7 +177,7 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
             maximum_capital = initial_capital
         end
         if !isnan(maximum_capital) || maximum_capital != 0
-            DD = round((abs((capital - maximum_capital) / maximum_capital) * 100), digits=3)
+            DD = round((abs((current_capital - maximum_capital) / maximum_capital) * 100), digits=3)
         end
     else
         all_dds = analytics_dataframe[!, :DD]
@@ -182,62 +186,74 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
         end
     end
     # End of DD calculation
-    analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, capital, DD]
-    return capital
+    analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, current_capital, DD]
 end
 
 function find_highest_return(analytics_dataframes)
     highest_return = Dict(:name => "", :return_value => 0.0)
-    for (df_name, df) in analytics_dataframes
+    highest_return_df = undef
+    for (df_dict, df) in analytics_dataframes
         last_return = last(df[.!ismissing.(df[!,:Capital]) ,:Capital])
+        push!(df_dict, :highest_return => last_return)
         if last_return > highest_return[:return_value]
-            highest_return[:name] = df_name
+            highest_return[:name] = df_dict[:name]
             highest_return[:return_value] = last_return
+            highest_return_df = df
         end
     end
-    return highest_return
+    return highest_return, highest_return_df
 end
 
 function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid", "pct_change"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
-    analytics_dataframes = Array{Pair{String,DataFrame},1}(undef, length(trades_column_names))
+    analytics_dataframes = Array{Pair{Dict{Symbol,Union{String,Float64}},DataFrame},1}(undef, length(trades_column_names))
     for (col_index, col_name) in enumerate(trades_column_names)
         non_empty_rows = @view data[.!ismissing.(data[:, col_name]),[prices_vec..., col_name]]
         numberOf_rows = nrow(non_empty_rows)
         if !iszero(numberOf_rows)
             offset = 1
-            numberOf_df_rows = Int(ceil(numberOf_rows / 2))
-            analytics_df = DataFrame(P_L=Array{Float64,1}(undef, numberOf_df_rows), TT=Array{Minute,1}(undef, numberOf_df_rows), Capital=Array{Float64,1}(undef, numberOf_df_rows), DD=zeros(numberOf_df_rows))
-            analytics_dataframes[col_index] = col_name => analytics_df
+            numberOf_df_rows = 0
+            if numberOf_df_rows % 2 == 0
+                numberOf_df_rows = Int(ceil(numberOf_rows / 2))
+            else
+                numberOf_df_rows = Int(ceil(numberOf_rows / 2)) + 1
+            end
+            analytics_df = DataFrame(P_L=zeros(numberOf_df_rows), TT=Array{Minute,1}(undef, numberOf_df_rows), Capital=zeros(numberOf_df_rows), DD=zeros(numberOf_df_rows))
+            analytics_dataframes[col_index] = Dict(:name => col_name) => analytics_df
             analytics_dataframe = analytics_dataframes[col_index]
-            capital = initial_capital
             for index in 1:2:numberOf_rows
                 # making sure that we are not asking for out of bound rows.
                 if index + offset <= numberOf_rows
                     trade_tuple = @view non_empty_rows[index:(index + offset), :]
                     trades_names = @view trade_tuple[:, col_name]
                     trade_number  = parse(Int64, check_trade_numbers(trades_names))
-                    capital = calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, capital, initial_capital)
+                    calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital)
+                # what if we have open trades?
+                elseif index == numberOf_rows
+                    println("$(col_name) has dangling open trade")
+                    trade_row = non_empty_rows[index, :]
+                    trade_name = @view trade_row[:, col_name]
+                    trade_number = match(r"^\w*#(\d*)", String(trade_name))[1]
+                    push!(trade_row, data[end,[prices_vec..., col_name]])
+                    calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_row, initial_capital)
                 end
             end
         end
     end
     analytics_dataframes = analytics_dataframes[filter(i -> isassigned(analytics_dataframes, i), 1:length(analytics_dataframes))]
     if !isempty(analytics_dataframes)
-        highest_return_dict = find_highest_return(analytics_dataframes)
+        highest_return_dict, highest_return_analytics_df = find_highest_return(analytics_dataframes)
         params = match(r"^Trades_(\d*.\d*)t(-\d*.\d*)d", highest_return_dict[:name])
         theta = params[1]
-        highest_return_analytics_df = [pair.second for pair in analytics_dataframes if !ismissing(pair) && pair.first == highest_return_dict[:name]]
-        highest_return_analytics_df = first(highest_return_analytics_df)
         mdd = maximum(highest_return_analytics_df.DD)
         push!(highest_return_dict, :MDD => mdd)
         push!(highest_return_dict, :Theta => theta)
         highest_return_original_df = data[!, [prices_vec...,"Theta_" * theta, "Exp_" * theta, highest_return_dict[:name]]]
         return (highest_return_dict, highest_return_original_df, highest_return_analytics_df), analytics_dataframes
     else
-        return (Dict(:name => "", :return_value => 0.0), DataFrame(), DataFrame())
+        return (Dict(:name => "", :return_value => 0.0), DataFrame(), DataFrame()), nothing
     end
 end 
 
@@ -246,9 +262,9 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
     result_array = Array{Tuple{Dict,DataFrame,DataFrame},1}(undef, length(theta_batches) * length(down_ind_batches))
-    all_analytics_dfs = Array{Pair{String,DataFrame},1}(undef, 0)
+    all_analytics_dicts = Array{Dict{Symbol,Union{Float64,String}},1}(undef, 0)
     counter = 1
-    progress_bar_size = ((nrow(data) * length(thetas)) + (length(thetas) * length(down_ind))) * (length(result_array))
+    progress_bar_size = (nrow(data) * length(thetas)) + (length(down_ind)^length(result_array)^length(thetas)^length(down_ind))
     p = Progress(progress_bar_size; enabled=show_progress)
     for theta_batch in theta_batches
         for down_ind_batch in down_ind_batches
@@ -256,9 +272,11 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
             trades = fit(data_prepared, theta_batch, down_ind_batch, p)
             (highest_return_dict, best_original_df, best_analytics_df), analytics_dataframes = find_best_theta_down_index(trades, initial_capital)
             result_array[counter] = (highest_return_dict, best_analytics_df, best_original_df)
-            append!(all_analytics_dfs, analytics_dataframes)
+            if !isnothing(analytics_dataframes)
+                append!(all_analytics_dicts, first.(analytics_dataframes))
+            end
             counter += 1
-            ProgressMeter.next!(p)
+            [ProgressMeter.next!(p) for i in 1:length(down_ind_batch)]
         end
     end
     dicts = first.(result_array)
@@ -266,8 +284,9 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     maximum_dict = [dic for dic in dicts if dic[:return_value] == maximum_return]
     maximum_dict = first(maximum_dict)
     final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
-    [ProgressMeter.next!(p) for i in 1:length(down_ind_batches)]
-    return first(final_array_element), all_analytics_dfs
+    sort!(all_analytics_dicts, by=x -> x[:highest_return], rev=true)
+    ProgressMeter.finish!(p)
+    return first(final_array_element), all_analytics_dicts
 end
 
 function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
