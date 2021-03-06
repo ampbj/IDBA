@@ -256,9 +256,48 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
     else
         return (Dict(:name => "", :return_value => 0.0), DataFrame(), DataFrame()), nothing
     end
-end 
+end
 
-function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64; show_progress=true)
+function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
+    dict = tuple[1]
+    theta = dict[:Theta]
+    trades_column = Symbol(dict[:name])
+    exp_column = Symbol("Exp_$(theta)")
+    analytics_df = tuple[2]
+    number_of_trades = nrow(analytics_df)
+    labeled_df = DataFrame(STD=Array{Float64,1}(undef, number_of_trades), 
+            TBO=Array{Minute,1}(undef, number_of_trades),
+            Profitable=CategoricalArray{String}(undef, number_of_trades))
+    original_df = tuple[3]
+    trades_df = @view original_df[.!ismissing.(original_df[!,trades_column]) .| .!ismissing.(original_df[!,exp_column]), :]
+    rows = Tables.namedtupleiterator(trades_df)
+    for (index, row) in enumerate(rows)
+        if !ismissing(row[trades_column]) && (startswith(String(row[trades_column]), "Open#"))
+            trade_number = parse(Int64, match(r"Open#(\d*)", String(row[trades_column]))[1])
+            previous_rows = @view trades_df[1:index, :]
+            exps = previous_rows[.!ismissing.(previous_rows[!, exp_column]),:]
+            last_uxp = last(exps[exps[!, exp_column] .== "UXP", :])
+
+            # calculating TBO for classification.
+            uxp_time = last_uxp.Timestamp
+            open_trade_time = row.Timestamp
+            TBO = Dates.Minute(open_trade_time - uxp_time)
+
+            # calculating profitability as a label
+            profitability = analytics_df[trade_number, "P_L"] > 0 ? "Yes" : "No"
+
+            # calculating STD of downtrend period
+            close_price_period = original_df[(original_df.Timestamp .>= uxp_time) .& (original_df.Timestamp .<=  open_trade_time), "Close"]
+            close_price_std = std(close_price_period)
+
+            # fill ML df
+            labeled_df[trade_number,[:STD, :TBO, :Profitable]] = [close_price_std, TBO, profitability]
+        end
+    end
+    return labeled_df
+end
+
+function train(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64; show_progress=true, save_to_csv="")
     (data, thetas, down_ind) = init(data_path, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
@@ -285,48 +324,20 @@ function batch_fit(data_path::String, thetas::AbstractVector{<:Number}, down_ind
     maximum_dict = [dic for dic in dicts if dic[:return_value] == maximum_return]
     maximum_dict = first(maximum_dict)
     final_array_element = [array_element for array_element in result_array if first(array_element)[:name] == maximum_dict[:name]]
-    sort!(all_analytics_dicts, by=x -> x[:highest_return], rev=true)
-    ProgressMeter.finish!(p)
-    return first(final_array_element), all_analytics_dicts
-end
-
-function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
-    dict = tuple[1]
-    theta = dict[:Theta]
-    trades_column = Symbol(dict[:name])
-    exp_column = Symbol("Exp_$(theta)")
-    analytics_df = tuple[2]
-    number_of_trades = nrow(analytics_df)
-    ML_df = DataFrame(STD=Array{Float64,1}(undef, number_of_trades), 
-            TBO=Array{Minute,1}(undef, number_of_trades),
-            Profitable=CategoricalArray{String}(undef, number_of_trades))
-    original_df = tuple[3]
-    trades_df = @view original_df[.!ismissing.(original_df[!,trades_column]) .| .!ismissing.(original_df[!,exp_column]), :]
-    rows = Tables.namedtupleiterator(trades_df)
-    for (index, row) in enumerate(rows)
-        if !ismissing(row[trades_column]) && (startswith(String(row[trades_column]), "Open#"))
-            trade_number = parse(Int64, match(r"Open#(\d*)", String(row[trades_column]))[1])
-            previous_rows = @view trades_df[1:index, :]
-            exps = previous_rows[.!ismissing.(previous_rows[!, exp_column]),:]
-            last_uxp = last(exps[exps[!, exp_column] .== "UXP", :])
-
-            # calculating TBO for classification.
-            uxp_time = last_uxp.Timestamp
-            open_trade_time = row.Timestamp
-            TBO = Dates.Minute(open_trade_time - uxp_time)
-
-            # calculating profitability as a label
-            profitability = analytics_df[trade_number, "P_L"] > 0 ? "Yes" : "No"
-
-            # calculating STD of downtrend period
-            close_price_period = original_df[(original_df.Timestamp .>= uxp_time) .& (original_df.Timestamp .<=  open_trade_time), "Close"]
-            close_price_std = std(close_price_period)
-
-            # fill ML df
-            ML_df[trade_number,[:STD, :TBO, :Profitable]] = [close_price_std, TBO, profitability]
+    if !isempty(final_array_element)
+        final_array_element = first(final_array_element)
+        labeled_df = label_best_params_df(final_array_element)
+        sort!(all_analytics_dicts, by=x -> x[:highest_return], rev=true)
+        if !isempty(save_to_csv)
+            CSV.write(save_to_csv * "/analytics.csv", final_array_element[2])
+            CSV.write(save_to_csv * "/trades.csv", final_array_element[3])
+            CSV.write(save_to_csv * "/labeled_df.csv", labeled_df)
         end
+        ProgressMeter.finish!(p)
+        return final_array_element, labeled_df, all_analytics_dicts
+    else
+    error("No trade was executed while using the supplied parameters!")
     end
-    return ML_df
 end
 
 function classification(df)
