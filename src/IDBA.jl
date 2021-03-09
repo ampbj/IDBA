@@ -267,7 +267,7 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
     number_of_trades = nrow(analytics_df)
     labeled_df = DataFrame(STD=Array{Float64,1}(undef, number_of_trades), 
             TBO=Array{Minute,1}(undef, number_of_trades),
-            Profitable=CategoricalArray{String}(undef, number_of_trades))
+            Profitable=Array{Int64}(undef, number_of_trades))
     original_df = tuple[3]
     trades_df = @view original_df[.!ismissing.(original_df[!,trades_column]) .| .!ismissing.(original_df[!,exp_column]), :]
     rows = Tables.namedtupleiterator(trades_df)
@@ -284,7 +284,7 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
             TBO = Dates.Minute(open_trade_time - uxp_time)
 
             # calculating profitability as a label
-            profitability = analytics_df[trade_number, "P_L"] > 0 ? "Yes" : "No"
+            profitability = analytics_df[trade_number, "P_L"] > 0 ? 1 : 0
 
             # calculating STD of downtrend period
             close_price_period = original_df[(original_df.Timestamp .>= uxp_time) .& (original_df.Timestamp .<=  open_trade_time), "Close"]
@@ -294,6 +294,7 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
             labeled_df[trade_number,[:STD, :TBO, :Profitable]] = [close_price_std, TBO, profitability]
         end
     end
+    labeled_df.TBO = Float64.(Dates.value.(labeled_df.TBO))
     return labeled_df
 end
 
@@ -339,15 +340,15 @@ function train(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Ab
     error("No trade was executed while using the supplied parameters!")
     end
 end
-
+        
 function classification(df)
-    if eltype(df.TBO) == Minute
-        df.TBO = Float64.(Dates.value.(df.TBO))
-    end
     y, X = unpack(df, ==(:Profitable), colname -> true)
     y = coerce(y, OrderedFactor)
+    train, test = partition(eachindex(y), 0.5, shuffle=true, rng=44)   
     mstd = machine(Standardizer(), X)
-    decisionTree(y, mstd)
+	fit!(mstd)
+	Xs = MLJ.transform(mstd, X)
+    
 end
 
 function decisionTree(y, X)
