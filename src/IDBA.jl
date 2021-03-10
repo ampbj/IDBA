@@ -7,6 +7,8 @@ using CategoricalArrays
 using Statistics
 using MLJ
 using ProgressMeter
+using PyCall
+@pyimport smote_variants as sv
 
 function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     data = CSV.read(data_path, DataFrame)
@@ -340,22 +342,85 @@ function train(data_path::String, thetas::AbstractVector{<:Number}, down_ind::Ab
     error("No trade was executed while using the supplied parameters!")
     end
 end
+
+function SMOTE(y, X)
+	oversampler = sv.SMOTE()
+	X_samp, y_samp = oversampler[:sample](Matrix(X), y)
+    X_df = DataFrame(X_samp, [:STD, :TBO]);
+    return y_samp, X_df
+end
         
-function classification(df)
+function prepare_for_ml(df)
+    # check for outlier and remove them
+    # check if label classes are imbalanced => SMOTE
+    # Make sure to choose the right number of neighbours for SMOTE
     y, X = unpack(df, ==(:Profitable), colname -> true)
+    if count(y .== 1) !==  count(y .== 0)
+        y, X = SMOTE(y, X)
+    end
+    coerce!(X, :STD => Continuous, :TBO => Continuous)
     y = coerce(y, OrderedFactor)
-    train, test = partition(eachindex(y), 0.5, shuffle=true, rng=44)   
-    mstd = machine(Standardizer(), X)
-	fit!(mstd)
-	Xs = MLJ.transform(mstd, X)
-    
+    Xs = MLJ.transform(fit!(machine(Standardizer(), X)), X)
+    train, test = partition(eachindex(y), 0.7, shuffle=true, rng=42)
+    return(y, Xs, train, test)
 end
 
-function decisionTree(y, X)
+function decisionTree(y, Xs, train, test)
     # model prediction using DecisionTree
     Tree = @iload DecisionTreeClassifier pkg = DecisionTree
     tree = Tree()
-    clf = machine(tree, X, y)
+    r_mpi = range(tree, :(max_depth), lower=1, upper=10)
+	r_msl = range(tree, :(min_samples_leaf), lower=1, upper=10)
+	tm = TunedModel(model=tree, ranges=[r_mpi, r_msl], 
+            tuning=Grid(resolution=8),resampling=CV(nfolds=5, rng=333),
+            operation=predict_mode, measure=misclassification_rate)
+    mtm = machine(tm, Xs, y)
+    fit!(mtm, rows=train)
+    ypred = predict_mode(mtm, rows=test)
+    mr = MLJ.misclassification_rate(ypred, y[test])
+    best_model = fitted_params(mtm).best_model
+    confusion_matrix = MLJ.confusion_matrix(ypred, y[test])
+    TP = true_positive(confusion_matrix)
+    FP = false_positive(confusion_matrix)
+    TN = true_negative(confusion_matrix)
+    FN = false_negative(confusion_matrix)
+    PPV = round(TP / (TP + FP), digits=3)
+    FNR = round(FN / (FN + TN), digits=3)
+    return(best_model, mtm, PPV, FNR, confusion_matrix, mr)
 end
 
+function BayesianQDA(y, Xs, train, test)
+    @load BayesianQDA pkg = ScikitLearn
+    logistic = MLJScikitLearnInterface.BayesianQDA(
+        priors=nothing,
+        reg_param=0.0,
+        store_covariance=false,
+        tol=0.0001)
+    clf = machine(logistic, Xs, y)
+    fit!(clf, rows=train)
+    ypred = predict_mode(clf, rows=test)
+    mr = MLJ.misclassification_rate(ypred, y[test])
+    return mr
+end
+function RandomForestClassifier(y, Xs, train, test)
+    @load RandomForestClassifier pkg = ScikitLearn
+    rfc = MLJScikitLearnInterface.RandomForestClassifier(max_depth=1)
+    r_md = range(rfc, :max_depth, lower=1, upper=10)
+    tm = TunedModel(model=rfc, ranges=[r_md],
+            tuning=Grid(resolution=8),resampling=CV(nfolds=5, rng=333),
+            operation=predict_mode, measure=misclassification_rate)
+    mach = machine(tm, Xs, y)
+    fit!(mach, rows=train)
+    ypred = predict_mode(mach, rows=test)
+    mr = MLJ.misclassification_rate(ypred, y[test])
+    best_model = fitted_params(mach).best_model
+    confusion_matrix = MLJ.confusion_matrix(ypred, y[test])
+    TP = true_positive(confusion_matrix)
+    FP = false_positive(confusion_matrix)
+    TN = true_negative(confusion_matrix)
+    FN = false_negative(confusion_matrix)
+    PPV = round(TP / (TP + FP), digits=3)
+    FNR = round(FN / (FN + TN), digits=3)
+    return(best_model, mach, PPV, FNR, confusion_matrix, mr)
+end
 end

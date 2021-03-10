@@ -1,3 +1,4 @@
 /Manifest.toml
 result
 .DS_Store
+*.jlso
