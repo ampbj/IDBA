@@ -9,6 +9,7 @@ using MLJ
 using ProgressMeter
 using PyCall
 @pyimport smote_variants as sv
+@load RandomForestClassifier pkg = ScikitLearn verbosity=0
 
 function init(data::Union{String,DataFrame}, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     if typeof(data) == String
@@ -416,13 +417,12 @@ function prepare_for_ml(df, smote_neighbours=5)
     coerce!(X, :STD => Continuous, :TBO => Continuous)
     y = coerce(y, OrderedFactor)
     Xs = MLJ.transform(fit!(machine(Standardizer(), X)), X)
-    train, test = partition(eachindex(y), 0.5, shuffle=true, rng=42)
+    train, test = partition(eachindex(y), 0.8, shuffle=true, rng=42)
     return(y, Xs, train, test)
 end
 
 function randomForestClassifier(df, smote_neighbours=5)
     (y, Xs, train, test) = prepare_for_ml(df, smote_neighbours)
-    @sync @load RandomForestClassifier pkg = ScikitLearn
     rfc = MLJScikitLearnInterface.RandomForestClassifier(max_depth=1)
     r_md = range(rfc, :max_depth, lower=1, upper=20)
     r_bs = range(rfc, :bootstrap, values=[true, false])
@@ -443,9 +443,6 @@ function randomForestClassifier(df, smote_neighbours=5)
     return(accuracy, mach, PPV, FNR, confusion_matrix)
 end
 
-struct Trade
-
-end
 function trade(data::Union{String,DataFrame}, theta::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, model, PPV::AbstractFloat, FNR::AbstractFloat, MDD::AbstractFloat, initial_capital::AbstractFloat; show_progress=true, save_to_csv="")
     data, theta, down_ind = init(data, theta, down_ind)
     progress_bar_size = nrow(data) 
