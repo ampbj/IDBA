@@ -10,8 +10,10 @@ using ProgressMeter
 using PyCall
 @pyimport smote_variants as sv
 
-function init(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
-    data = CSV.read(data_path, DataFrame)
+function init(data::Union{String,DataFrame}, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
+    if typeof(data) == String
+        data = CSV.read(data, DataFrame)
+    end
     # Dealing with dataframe structure format
     data_names = names(data)
     timestamp_column = in("Timestamp", data_names)
@@ -182,10 +184,55 @@ function calculate_trade_analytics(trade_number::Number, analytics_dataframe, tr
             DD = round((abs((current_capital - maximum_capital) / maximum_capital) * 100), digits=3)
         end
     else
-        all_dds = analytics_dataframe[!, :DD]
-        if !isempty(all_dds)
-            DD = maximum(all_dds)
+        DD = 0
+    end
+    # End of DD calculation
+    analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, current_capital, DD]
+end
+
+function calculate_trade_analytics(trade_number::Number, analytics_dataframe, trade_tuple, initial_capital, ml_model, ppv, fnr, mdd, Xs)
+    # When buying use Ask price. When selling use Bid price.
+    all_capitals = analytics_dataframe[.!iszero.(analytics_dataframe.Capital), :Capital]
+    last_capital = initial_capital
+    if !isempty(all_capitals)
+        last_capital = last(all_capitals)
+    end
+    convert(Int64, trade_number)
+    buy_time, ask_price = trade_tuple[1,[:Timestamp, :Ask]]
+    sell_time, bid_price = trade_tuple[2,[:Timestamp, :Bid]]
+    # Dealing with machine learning side of trading:
+    Xs_trade_row = Xs[trade_number, :]
+    prediction_tuple = (STD = [Xs_trade_row.STD], TBO = [Xs_trade_row.TBO])
+    prediction = MLJ.predict_mode(ml_model, prediction_tuple)
+    capital_to_trade = 0
+    if prediction[1] == 1
+        println("Trade=$(trade_number) prediction is 1,  ppv=$(ppv) last_capital=$(last_capital) capital_for_trade=$(round(last_capital * ppv, digits=5))")
+        capital_to_trade = round(last_capital * ppv, digits=5)
+    elseif prediction[1] == 0
+        println("Trade=$(trade_number) prediction is 0,  fnr=$(fnr) last_capital=$(last_capital) capital_for_trade=$(round(last_capital * fnr, digits=5))")
+        capital_to_trade = round(last_capital * fnr, digits=5)
+    end
+    p_l = round(((bid_price * capital_to_trade) - (ask_price * capital_to_trade)), digits=5)
+    tt =  Dates.Minute(sell_time - buy_time)
+    current_capital = round(last_capital + p_l, digits=2)
+    # Calculating drawdown:
+    DD = 0
+    if p_l < 0
+        maximum_capital = 0
+        if !isempty(all_capitals)
+            maximum_capital = maximum(all_capitals)
         end
+        if maximum_capital < initial_capital
+            maximum_capital = initial_capital
+        end
+        if !isnan(maximum_capital) || maximum_capital != 0
+            DD = round((abs((current_capital - maximum_capital) / maximum_capital) * 100), digits=3)
+        end
+    else
+        DD = 0
+    end
+    if DD > mdd
+        error("Trade number = $(trade_number) DD = $(DD) is bigger than MDD=$(mdd). Therefore trading stopped!")
     end
     # End of DD calculation
     analytics_dataframe[trade_number, [:P_L, :TT, :Capital, :DD]] = [p_l, tt, current_capital, DD]
@@ -206,7 +253,7 @@ function find_highest_return(analytics_dataframes)
     return highest_return, highest_return_df
 end
 
-function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
+function find_best_theta_down_index(data::DataFrame, initial_capital::Float64; ml_model=nothing, ppv=nothing, fnr=nothing, mdd=nothing, Xs=nothing)
     prices_vec = ["Timestamp", "Close", "Ask", "Bid", "pct_change"]
     trades_column_names = names(data[!, r"Trades_"])
     df = @view data[!, [prices_vec...,trades_column_names...]]
@@ -231,16 +278,24 @@ function find_best_theta_down_index(data::DataFrame, initial_capital::Float64)
                     trade_tuple = @view non_empty_rows[index:(index + offset), :]
                     trades_names = @view trade_tuple[:, col_name]
                     trade_number  = parse(Int64, check_trade_numbers(trades_names))
-                    calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital)
+                    if !isnothing(ml_model) && !isnothing(ppv) && !isnothing(fnr) && !isnothing(mdd) && !isnothing(Xs)
+                        calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital, ml_model, ppv, fnr, mdd, Xs)
+                    else
+                        calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital)
+                    end
                 # what if we have open trades? Following will handle it.
                 elseif index == numberOf_rows
-                    trade_row = non_empty_rows[index, :]
-                    trade_name = trade_row[col_name]
+                    trade_tuple = non_empty_rows[index, :]
+                    trade_name = trade_tuple[col_name]
                     trade_number = parse(Int64, match(r"^\w*#(\d*)", String(trade_name))[1])
                     end_row = data[end,[prices_vec..., col_name]]
-                    trade_row = DataFrame(trade_row)
-                    push!(trade_row, end_row)
-                    calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_row, initial_capital)
+                    trade_tuple = DataFrame(trade_tuple)
+                    push!(trade_tuple, end_row)
+                    if !isnothing(ml_model) && !isnothing(ppv) && !isnothing(fnr) && !isnothing(mdd) && !isnothing(Xs)
+                        calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital, ml_model, ppv, fnr, mdd, Xs)
+                    else
+                        calculate_trade_analytics(trade_number, analytics_dataframe.second, trade_tuple, initial_capital)
+                    end
                 end
             end
         end
@@ -300,8 +355,8 @@ function label_best_params_df(tuple::Tuple{Dict,DataFrame,DataFrame})
     return labeled_df
 end
 
-function train(data_path::String, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64; show_progress=true, save_to_csv="")
-    (data, thetas, down_ind) = init(data_path, thetas, down_ind)
+function train(data::Union{String,DataFrame}, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, batch_size::Int, initial_capital::Float64; show_progress=true, save_to_csv="")
+    (data, thetas, down_ind) = init(data, thetas, down_ind)
     theta_batches = [thetas[i:min(i + batch_size - 1, length(thetas))] for i in 1:batch_size:length(thetas)]
     down_ind_batches = [down_ind[i:min(i + batch_size - 1, length(down_ind))] for i in 1:batch_size:length(down_ind)]
     result_array = Array{Tuple{Dict,DataFrame,DataFrame},1}(undef, length(theta_batches) * length(down_ind_batches))
@@ -377,9 +432,7 @@ function randomForestClassifier(df, smote_neighbours=5)
     mach = machine(tm, Xs, y)
     fit!(mach, rows=train)
     ypred = predict_mode(mach, rows=test)
-    misclass_rate = MLJ.misclassification_rate(ypred, y[test])
     accuracy = MLJ.accuracy(ypred, y[test])
-    best_model = fitted_params(mach).best_model
     confusion_matrix = MLJ.confusion_matrix(ypred, y[test])
     TP = true_positive(confusion_matrix)
     FP = false_positive(confusion_matrix)
@@ -390,6 +443,20 @@ function randomForestClassifier(df, smote_neighbours=5)
     return(accuracy, mach, PPV, FNR, confusion_matrix)
 end
 
-function trade(data::Union{String,DataFrame}, theta::AbstractFloat, down_ind::AbstractFloat, model, PPV::AbstractFloat, FNR::AbstractFloat, MDD::AbstractFloat)
+struct Trade
+
+end
+function trade(data::Union{String,DataFrame}, theta::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, model, PPV::AbstractFloat, FNR::AbstractFloat, MDD::AbstractFloat, initial_capital::AbstractFloat; show_progress=true, save_to_csv="")
+    data, theta, down_ind = init(data, theta, down_ind)
+    progress_bar_size = nrow(data) 
+    p = Progress(progress_bar_size; enabled=show_progress)
+    (data_prepared, _, _) = prepare(copy(data), theta, down_ind, p)
+    trades = fit(data_prepared, theta, down_ind, p)
+    (dict, highest_return_original_df, highest_return_analytics_df), _ = find_best_theta_down_index(trades, initial_capital)
+    labeled_df = label_best_params_df((dict, highest_return_analytics_df, highest_return_original_df))
+    y, X = unpack(labeled_df, ==(:Profitable), colname -> true)
+    Xs = MLJ.transform(fit!(machine(Standardizer(), X)), X)
+    (highest_return_dict, best_original_df, best_analytics_df), _ = find_best_theta_down_index(trades, initial_capital; ml_model=model, ppv=PPV, fnr=FNR, mdd=MDD, Xs=Xs)
+    return highest_return_dict, best_analytics_df, labeled_df, best_original_df
 end
 end
