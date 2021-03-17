@@ -15,6 +15,7 @@ MLJMultivariateStatsInterface = "1b6a4a23-ba22-4f51-9698-8599985d3728"
 MLJScikitLearnInterface = "5ae90465-5518-4432-b9d2-8a1def2f0cab"
 MySQL = "39abe10b-433b-5dbd-92d4-e302a9df00cd"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+ProtoBuf = "3349acd9-ac6a-5e09-bcdb-63829b23a429"
 PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
 PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 
