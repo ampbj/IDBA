@@ -1,15 +1,8 @@
 module IDBA
 
-using Dates
-using DataFrames
-using CSV
-using CategoricalArrays
-using Statistics
-using MLJ
-using ProgressMeter
-using PyCall
+using Dates, DataFrames, CSV, CategoricalArrays, Statistics, MLJ, ProgressMeter, PyCall
 @pyimport smote_variants as sv
-@load RandomForestClassifier pkg = ScikitLearn verbosity=0
+@load RandomForestClassifier pkg = ScikitLearn verbosity = 0
 
 function init(data::Union{String,DataFrame}, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     if typeof(data) == String
