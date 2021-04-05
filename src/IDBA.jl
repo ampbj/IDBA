@@ -399,7 +399,7 @@ function SMOTE(y, X;smote_neighbours=5)
     return y_samp, X_df
 end
         
-function prepare_for_ml(df, smote_neighbours=5)
+function prepare_for_ml(df, test_train_split=0.5, smote_neighbours=5)
     # check for outlier and remove them: This is a manual step.
     # check if label classes are imbalanced => SMOTE: Automated.
     # Make sure to choose the right number of neighbours for SMOTE: This is a manual step.
@@ -410,12 +410,12 @@ function prepare_for_ml(df, smote_neighbours=5)
     coerce!(X, :STD => Continuous, :TBO => Continuous)
     y = coerce(y, OrderedFactor)
     Xs = MLJ.transform(fit!(machine(Standardizer(), X)), X)
-    train, test = partition(eachindex(y), 0.8, shuffle=true, rng=42)
+    train, test = partition(eachindex(y), test_train_split, shuffle=true, rng=42)
     return(y, Xs, train, test)
 end
 
-function randomForestClassifier(df, smote_neighbours=5)
-    (y, Xs, train, test) = prepare_for_ml(df, smote_neighbours)
+function randomForestClassifier(df, test_train_split=0.5, smote_neighbours=5)
+    (y, Xs, train, test) = prepare_for_ml(df, test_train_split, smote_neighbours)
     rfc = MLJScikitLearnInterface.RandomForestClassifier(max_depth=1)
     r_md = range(rfc, :max_depth, lower=1, upper=20)
     r_bs = range(rfc, :bootstrap, values=[true, false])
