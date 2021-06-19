@@ -1,8 +1,8 @@
 module IDBA
 
 using Dates, DataFrames, CSV, CategoricalArrays, Statistics, MLJ, ProgressMeter, PyCall
-@pyimport smote_variants as sv
-@load RandomForestClassifier pkg = ScikitLearn verbosity = 0
+# @pyimport smote_variants as sv
+# @load RandomForestClassifier pkg = ScikitLearn verbosity = 0
 
 function init(data::Union{String,DataFrame}, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number})
     if typeof(data) == String
@@ -29,11 +29,13 @@ function pct_change(input::AbstractVector{<:Number}, period::Int=1)
 end
 
 function prepare(data::DataFrame, thetas::AbstractVector{<:Number}, down_ind::AbstractVector{<:Number}, p)
-        # preparing dataframe for getting fit
+    # preparing dataframe for getting fit
     dropmissing!(insertcols!(data, :pct_change => pct_change(data.Close)))
     if eltype(data.Timestamp) !== DateTime
-        data[!,:Timestamp] = parse.(DateTime, data.Timestamp, dateformat"yyyymmdd\ HHMMSSsss")
+        data[!,:Timestamp] = parse.(DateTime, data.Timestamp, dateformat"yyyy-mm-dd\ HH:MM:SS")
     end
+    sort!(data, (:Timestamp))
+    @info "Data has been sorted!"
     for theta in thetas
         data_length = length(data.Timestamp)
         theta_column = CategoricalArray{Union{Missing,String}}(repeat([missing], data_length))
